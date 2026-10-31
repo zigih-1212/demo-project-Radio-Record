@@ -1,0 +1,44 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pulseops
+      POSTGRES_PASSWORD: pulseops
+      POSTGRES_DB: pulseops
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulseops -d pulseops"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: pulseops
+      RABBITMQ_DEFAULT_PASS: pulseops
+    ports: ["5672:5672", "15672:15672"]
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgres://pulseops:pulseops@postgres:5432/pulseops
+      REDIS_URL: redis://redis:6379
+      AMQP_URL: amqp://pulseops:pulseops@rabbitmq:5672
+      PORT: "3000"
+    ports: ["3000:3000"]
+    depends_on: [postgres, redis, rabbitmq]
+    command: ["npm", "run", "start"]
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: postgres://pulseops:pulseops@postgres:5432/pulseops
+      REDIS_URL: redis://redis:6379
+      AMQP_URL: amqp://pulseops:pulseops@rabbitmq:5672
+    depends_on: [postgres, redis, rabbitmq]
+    command: ["npm", "run", "start:worker"]
+volumes:
+  pgdata:
