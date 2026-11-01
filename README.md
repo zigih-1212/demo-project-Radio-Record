@@ -519,15 +519,6 @@ NestJS читают/пишут свой PostgreSQL, синхронизируяс
 - **Воркер ничего не обрабатывает** — проверьте `/api/health` (поле `worker`) и панель RabbitMQ (порт 15672).
 - **Задачи застряли в `processing`** — перезапустите воркер; устаревший heartbeat виден в `/api/health`.
 
-## 🗺 Roadmap (что добавить дальше)
-
-- [ ] JWT-авторизация и ролевой доступ к API
-- [ ] Отложенные задачи (cron-подобные) с pg_cron / bull-board
-- [ ] Повторы с экспоненциальной задержкой по типу задачи
-- [ ] Профили деплоя Docker Swarm / Compose для staging и prod
-- [ ] Unit-тесты (Vitest) + интеграционные тесты API (supertest)
-- [ ] Dashboard Grafana по метрикам Prometheus
-
 ## 📄 Лицензия
 
 MIT
