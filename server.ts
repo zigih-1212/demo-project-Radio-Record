@@ -863,27 +863,135 @@ function startWorkerHeartbeat(): void {
 
 const APP_HTML = `<!doctype html>
 <html lang="ru"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>PulseOps</title>
-<style>body{font-family:system-ui,sans-serif;margin:0;background:#f5f7fb;color:#172234}header{background:#111c31;color:#fff;padding:16px 24px}main{max-width:1100px;margin:24px auto;padding:0 16px}.card{background:#fff;border:1px solid #e7ebf2;border-radius:12px;padding:16px;margin-bottom:16px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #f0f2f7;font-size:13px;text-align:left}.btn{border:0;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer}.btn-primary{background:#4969e8;color:#fff}.status{padding:4px 8px;border-radius:999px;font-size:11px;font-weight:700}.status-queued{background:#fff6df;color:#ac7417}.status-processing{background:#edf1ff;color:#4969e8}.status-succeeded{background:#e6f7f0;color:#148765}.status-failed{background:#fff0f0;color:#c64c56}.status-cancelled{background:#eee;color:#666}input,select{padding:8px;border:1px solid #dfe5ef;border-radius:8px}.badge{display:inline-block;background:#4969e8;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;margin-left:8px}</style>
-</head><body><header><h1>PulseOps — фоновые задачи</h1></header><main>
-<div class="card"><button class="btn btn-primary" onclick="openModal()">+ Новая задача</button> <button class="btn" onclick="refresh()">Обновить</button> <span id="health"></span><span id="mode" class="badge"></span></div>
-<div class="card"><table><thead><tr><th>Задача</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Попытки</th><th>Действия</th></tr></thead><tbody id="rows"></tbody></table></div>
-<div id="modal" style="display:none;position:fixed;inset:0;background:#0006;place-items:center"><div class="card" style="width:min(90%,420px);margin:auto"><h3>Новая задача</h3>
-<input id="title" placeholder="Название" style="width:100%;margin-bottom:8px"/><select id="type" style="width:100%;margin-bottom:8px"><option value="campaign_publish">Публикация кампании</option><option value="sync_catalog">Синхронизация каталога</option><option value="send_digest">Email-дайджест</option><option value="import_orders">Импорт заказов</option></select>
-<select id="priority" style="width:100%;margin-bottom:8px"><option value="low">Низкий</option><option value="normal" selected>Обычный</option><option value="high">Высокий</option></select>
-<label><input type="checkbox" id="fail"/> Смоделировать ошибку</label><br/><br/>
-<button class="btn btn-primary" onclick="submit()">Создать</button> <button class="btn" onclick="closeModal()">Отмена</button>
+<title>PulseOps — Async Job Platform</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;background:#0b1220;color:#e2e8f0}
+header{background:#0f172a;border-bottom:1px solid #1e293b;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.brand{font-size:18px;font-weight:800}.brand b{color:#4f7cff}.sub{font-size:11px;color:#64748b;font-weight:400;margin-left:8px}
+.hdr-right{display:flex;gap:10px;align-items:center}
+.badge{background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600}
+.health{font-size:12px;font-weight:600}.health.ok{color:#34d399}.health.bad{color:#f87171}
+main{max-width:1200px;margin:20px auto;padding:0 16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:#111a2e;border:1px solid #1f2b47;border-radius:12px;padding:14px}
+.stat .n{font-size:26px;font-weight:800}.stat .l{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+.card{background:#111a2e;border:1px solid #1f2b47;border-radius:12px;padding:16px;margin-bottom:16px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.toolbar .spacer{flex:1}
+input,select{background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:8px 10px;font-size:13px}
+input:focus,select:focus{outline:none;border-color:#4f7cff}
+.btn{border:1px solid #334155;background:#1e293b;color:#e2e8f0;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600;cursor:pointer}
+.btn:hover{background:#273449}.btn-primary{background:#4f7cff;border-color:#4f7cff;color:#fff}.btn-primary:hover{background:#3f6bef}
+.btn-danger{background:transparent;border-color:#7f1d1d;color:#f87171}.btn-danger:hover{background:#7f1d1d;color:#fff}
+.btn-sm{padding:4px 8px;font-size:11px}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#64748b;text-align:left;padding:8px 10px;border-bottom:1px solid #1f2b47}
+td{padding:10px;border-bottom:1px solid #16203a;font-size:13px;vertical-align:middle}
+tr:hover td{background:#16203a}
+.title{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:#64748b}
+.status{padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;display:inline-block}
+.status-queued{background:#3a2f10;color:#fbbf24}.status-processing{background:#1e3a5f;color:#60a5fa}
+.status-succeeded{background:#0f3d2e;color:#34d399}.status-failed{background:#4a1414;color:#f87171}.status-cancelled{background:#262626;color:#9ca3af}
+.pri{font-size:11px;font-weight:700}.pri-high{color:#f87171}.pri-normal{color:#60a5fa}.pri-low{color:#9ca3af}
+.pager{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px;color:#64748b;flex-wrap:wrap}
+#drawer{position:fixed;top:0;right:0;height:100%;width:min(480px,92vw);background:#0f172a;border-left:1px solid #1e293b;box-shadow:-8px 0 30px #0008;transform:translateX(100%);transition:transform .2s;z-index:20;padding:20px;overflow:auto}
+#drawer.open{transform:none}
+#drawer h3{margin:0 0 4px}.drawer-close{float:right}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:13px;margin:14px 0}
+.kv .k{color:#64748b}
+.timeline{border-left:2px solid #1e293b;margin:8px 0 0 6px;padding-left:16px}
+.tl-item{position:relative;padding:0 0 14px}.tl-item:before{content:'';position:absolute;left:-21px;top:3px;width:10px;height:10px;border-radius:50%;background:#4f7cff}
+.tl-item .t{font-size:11px;color:#64748b}.tl-item .m{font-size:12px;font-weight:600}.tl-item .msg{font-size:12px;color:#94a3b8}
+#modal{position:fixed;inset:0;background:#000a;display:none;place-items:center;z-index:30}
+#modal.open{display:grid}
+.modal-box{background:#0f172a;border:1px solid #1e293b;border-radius:14px;padding:20px;width:min(92vw,440px)}
+.modal-box h3{margin:0 0 12px}.modal-box label{display:block;font-size:12px;color:#94a3b8;margin:10px 0 4px}
+.modal-box input,.modal-box select{width:100%}
+#toasts{position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:40}
+.toast{background:#0f172a;border:1px solid #1e293b;border-left:4px solid #4f7cff;border-radius:10px;padding:10px 14px;font-size:13px;box-shadow:0 8px 24px #0008;animation:tin .2s}
+.toast.ok{border-left-color:#34d399}.toast.err{border-left-color:#f87171}
+@keyframes tin{from{transform:translateX(20px);opacity:0}}
+.empty{padding:24px;text-align:center;color:#64748b}
+</style></head><body>
+<header><div class="brand">⚡ <b>Pulse</b>Ops <span class="sub">async job platform</span></div>
+<div class="hdr-right"><span id="mode" class="badge"></span><span id="health" class="health"></span></div></header>
+<main>
+<section class="stats" id="stats"></section>
+<section class="card">
+<div class="toolbar">
+<select id="fStatus"><option value="">Все статусы</option><option>queued</option><option>processing</option><option>succeeded</option><option>failed</option><option>cancelled</option></select>
+<select id="fType"><option value="">Все типы</option><option value="campaign_publish">campaign_publish</option><option value="sync_catalog">sync_catalog</option><option value="send_digest">send_digest</option><option value="import_orders">import_orders</option></select>
+<select id="fPriority"><option value="">Любой приоритет</option><option value="high">high</option><option value="normal">normal</option><option value="low">low</option></select>
+<input id="q" placeholder="Поиск по названию…" style="width:200px"/>
+<button class="btn" onclick="applyFilters()">Применить</button>
+<button class="btn" onclick="resetFilters()">Сброс</button>
+<span class="spacer"></span>
+<button class="btn" onclick="loadAll()">Обновить</button>
+<button class="btn btn-primary" onclick="openModal()">+ Новая задача</button>
+</div>
+<table><thead><tr><th>Задача</th><th>Тип</th><th>Приоритет</th><th>Статус</th><th>Попытки</th><th>Создана</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<div id="empty" class="empty" style="display:none">Нет задач по фильтру</div>
+<div class="pager" id="pager"></div>
+</section>
+</main>
+<aside id="drawer">
+<button class="btn btn-sm drawer-close" onclick="closeDrawer()">✕ Закрыть</button>
+<h3 id="dTitle">Задача</h3><div id="dId" class="mono"></div>
+<div class="kv" id="dKv"></div>
+<h4 style="margin:16px 0 8px;font-size:13px;color:#94a3b8">События</h4>
+<div class="timeline" id="dEvents"></div>
+</aside>
+<div id="modal"><div class="modal-box">
+<h3>Новая задача</h3>
+<label>Название</label><input id="title" placeholder="Например: Публикация подборки"/>
+<label>Тип</label><select id="type"><option value="campaign_publish">campaign_publish</option><option value="sync_catalog">sync_catalog</option><option value="send_digest">send_digest</option><option value="import_orders">import_orders</option></select>
+<label>Приоритет</label><select id="priority"><option value="low">low</option><option value="normal" selected>normal</option><option value="high">high</option></select>
+<label><input type="checkbox" id="fail" style="width:auto"/> Смоделировать ошибку обработчика</label>
+<div style="display:flex;gap:8px;margin-top:16px"><button class="btn btn-primary" onclick="createJob()">Создать</button><button class="btn" onclick="closeModal()">Отмена</button></div>
 </div></div>
+<div id="toasts"></div>
 <script>
-async function api(p,o={}){const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...(o.headers||{})}});const b=await r.json().catch(()=>({error:'bad json'}));if(!r.ok)throw new Error(b.error||'error');return b;}
-async function refresh(){try{const [j,h]=await Promise.all([api('/api/jobs'),api('/api/health')]);document.getElementById('rows').innerHTML=j.items.map(x=>'<tr><td>'+x.title+'</td><td>'+x.job_type+'</td><td>'+x.priority+'</td><td><span class="status status-'+x.status+'">'+x.status+'</span></td><td>'+x.attempts+'</td><td>'+(x.status==='failed'?'<button onclick="retry(\\''+x.id+'\\')">Повторить</button> ':'')+(x.status==='queued'||x.status==='processing'?'<button onclick="cancel(\\''+x.id+'\\')">Отменить</button>':'')+'</td></tr>').join('');document.getElementById('health').textContent='Сервисы: '+(h.ok?'OK':'ПРОБЛЕМА');document.getElementById('mode').textContent=h.mode==='demo'?'демо-режим (без Docker)':'Docker';}catch(e){document.getElementById('health').textContent=e.message;}}
-async function retry(id){await api('/api/jobs/'+id+'/retry',{method:'POST'});refresh();}
-async function cancel(id){await api('/api/jobs/'+id+'/cancel',{method:'POST'});refresh();}
-function openModal(){document.getElementById('modal').style.display='grid';}
-function closeModal(){document.getElementById('modal').style.display='none';}
-async function submit(){const body={title:document.getElementById('title').value,type:document.getElementById('type').value,priority:document.getElementById('priority').value,simulateFailure:document.getElementById('fail').checked};await api('/api/jobs',{method:'POST',body:JSON.stringify(body)});closeModal();refresh();}
-refresh();setInterval(refresh,5000);
-</script></main></body></html>`;
+var state={status:'',type:'',priority:'',q:'',limit:10,offset:0};
+function api(p,o){o=o||{};o.headers=Object.assign({'Content-Type':'application/json'},o.headers||{});return fetch(p,o).then(function(r){return r.json().catch(function(){return{error:'bad json'}}).then(function(b){if(!r.ok)throw new Error(b.error||('HTTP '+r.status));return b;});});}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function fmt(d){return d?new Date(d).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
+function pri(p){return '<span class="pri pri-'+p+'">'+p+'</span>';}
+function st(s){return '<span class="status status-'+s+'">'+s+'</span>';}
+function loadAll(){Promise.all([api('/api/stats'),api('/api/jobs?status='+state.status+'&type='+state.type+'&priority='+state.priority+'&q='+encodeURIComponent(state.q)+'&limit='+state.limit+'&offset='+state.offset),api('/api/health')]).then(function(r){renderStats(r[0]);renderJobs(r[1]);renderHealth(r[2]);}).catch(function(e){toast(e.message,'err');});}
+function renderStats(s){var cards=[['В очереди',s.queued,'#fbbf24'],['В работе',s.processing,'#60a5fa'],['Успех',s.succeeded,'#34d399'],['Ошибки',s.failed,'#f87171'],['Отменены',s.cancelled,'#9ca3af'],['Всего',s.queued+s.processing+s.succeeded+s.failed+s.cancelled,'#4f7cff']];
+document.getElementById('stats').innerHTML=cards.map(function(c){return '<div class="stat"><div class="n" style="color:'+c[2]+'">'+c[1]+'</div><div class="l">'+c[0]+'</div></div>';}).join('');}
+function renderJobs(j){var tb=document.getElementById('rows');document.getElementById('empty').style.display=j.items.length?'none':'block';
+tb.innerHTML=j.items.map(function(x){var acts=[];if(x.status==='failed')acts.push('<button class="btn btn-sm" onclick="retryJob(\\''+x.id+'\\')">Повторить</button>');
+if(x.status==='queued'||x.status==='processing')acts.push('<button class="btn btn-sm btn-danger" onclick="cancelJob(\\''+x.id+'\\')">Отменить</button>');
+acts.push('<button class="btn btn-sm" onclick="openDetail(\\''+x.id+'\\')">Детали</button>');
+return '<tr><td class="title" title="'+esc(x.title)+'">'+esc(x.title)+'</td><td class="mono">'+x.job_type+'</td><td>'+pri(x.priority)+'</td><td>'+st(x.status)+'</td><td>'+x.attempts+'/'+x.max_attempts+'</td><td class="mono">'+fmt(x.created_at)+'</td><td style="white-space:nowrap">'+acts.join(' ')+'</td></tr>';}).join('');
+var pages=Math.ceil(j.total/j.limit);var pg='Показано '+j.items.length+' из '+j.total;
+if(pages>1){pg+=' · стр. '+(j.offset/j.limit+1)+'/'+pages;
+if(j.offset>0)pg+=' <button class="btn btn-sm" onclick="page(-1)">←</button>';
+if(j.offset+j.limit<j.total)pg+=' <button class="btn btn-sm" onclick="page(1)">→</button>';}
+document.getElementById('pager').innerHTML=pg;}
+function renderHealth(h){var el=document.getElementById('health');el.textContent=h.ok?'● сервисы OK':'● проблемы';el.className='health '+(h.ok?'ok':'bad');
+document.getElementById('mode').textContent=h.mode==='demo'?'демо-режим (in-memory)':'docker';}
+function applyFilters(){state.status=document.getElementById('fStatus').value;state.type=document.getElementById('fType').value;state.priority=document.getElementById('fPriority').value;state.q=document.getElementById('q').value;state.offset=0;loadAll();}
+function resetFilters(){document.getElementById('fStatus').value='';document.getElementById('fType').value='';document.getElementById('fPriority').value='';document.getElementById('q').value='';applyFilters();}
+function page(d){state.offset=Math.max(0,state.offset+d*state.limit);loadAll();}
+function openDetail(id){api('/api/jobs/'+id).then(function(d){var x=d.item;document.getElementById('dTitle').textContent=x.title;document.getElementById('dId').textContent=x.id;
+document.getElementById('dKv').innerHTML=[['Статус',st(x.status)],['Тип',x.job_type],['Приоритет',x.priority],['Попытки',x.attempts+' / '+x.max_attempts],['Создана',fmt(x.created_at)],['Обновлена',fmt(x.updated_at)],['Завершена',fmt(x.completed_at)],['Ошибка',x.error?esc(x.error):'—']].map(function(kv){return '<div class="k">'+kv[0]+'</div><div>'+kv[1]+'</div>';}).join('');
+document.getElementById('dEvents').innerHTML=(d.events&&d.events.length?d.events.map(function(e){return '<div class="tl-item"><div class="m">'+e.event_type+'</div><div class="t">'+fmt(e.created_at)+'</div>'+(e.message?'<div class="msg">'+esc(e.message)+'</div>':'')+'</div>';}).join(''):'<div class="empty">Нет событий</div>');
+document.getElementById('drawer').classList.add('open');}).catch(function(e){toast(e.message,'err');});}
+function closeDrawer(){document.getElementById('drawer').classList.remove('open');}
+function openModal(){document.getElementById('modal').classList.add('open');}
+function closeModal(){document.getElementById('modal').classList.remove('open');}
+function createJob(){var body={title:document.getElementById('title').value.trim(),type:document.getElementById('type').value,priority:document.getElementById('priority').value,simulateFailure:document.getElementById('fail').checked};
+if(body.title.length<3){toast('Название — минимум 3 символа','err');return;}
+var key=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now());
+api('/api/jobs',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify(body)}).then(function(){closeModal();toast('Задача создана','ok');state.offset=0;loadAll();}).catch(function(e){toast(e.message,'err');});}
+function retryJob(id){api('/api/jobs/'+id+'/retry',{method:'POST'}).then(function(){toast('Отправлена на повтор','ok');loadAll();}).catch(function(e){toast(e.message,'err');});}
+function cancelJob(id){api('/api/jobs/'+id+'/cancel',{method:'POST'}).then(function(){toast('Отменена','ok');loadAll();}).catch(function(e){toast(e.message,'err');});}
+function toast(msg,type){var t=document.createElement('div');t.className='toast '+(type||'');t.textContent=msg;document.getElementById('toasts').appendChild(t);setTimeout(function(){t.remove();},3500);}
+loadAll();setInterval(loadAll,5000);
+</script></body></html>`;
 
 const app = express();
 app.disable("x-powered-by");
@@ -944,7 +1052,11 @@ app.get("/api/metrics", async (_req, res, next) => {
 
 app.get("/api/jobs", async (req, res, next) => {
   try {
-    const parsed = listJobsSchema.safeParse(req.query);
+    const rawQuery: Record<string, unknown> = { ...req.query };
+    for (const key of ["status", "type", "priority", "q"]) {
+      if (typeof rawQuery[key] === "string" && (rawQuery[key] as string).length === 0) delete rawQuery[key];
+    }
+    const parsed = listJobsSchema.safeParse(rawQuery);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues.map((issue) => `${issue.path.join(".") || "query"}: ${issue.message}`).join("; ") });
       return;
