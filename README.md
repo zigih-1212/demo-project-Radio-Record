@@ -62,7 +62,17 @@ Designed to showcase middle-level fullstack skills: REST API, background worker,
 
 ## 🚀 Quick start
 
-### Option A — Docker (recommended)
+### Option A — One command (recommended)
+
+```bash
+npm run start:all
+```
+
+Or just double-click `start.bat` (Windows) / run `./start.sh` (macOS/Linux).  
+This will start Docker dependencies, install npm packages, and launch API + worker automatically.  
+Then open http://localhost:3000.
+
+### Option B — Manual
 
 ```bash
 docker compose up -d postgres redis rabbitmq
@@ -70,6 +80,21 @@ npm install
 npm run dev        # API  -> http://localhost:3000
 npm run dev:worker # worker (second terminal)
 ```
+
+### Option C — Demo mode without Docker
+
+No PostgreSQL/Redis/RabbitMQ required — everything runs in-memory in a single process
+(the outbox pattern is still demonstrated). Great for a quick look or a laptop without Docker.
+
+```bash
+npm install
+npm run demo
+```
+
+Then open http://localhost:3000.
+
+> `npm run start:all` / `start.bat` automatically choose Docker mode when Docker Desktop is
+> running and fall back to demo mode when it is not.
 
 ### Option B — run everything in containers
 

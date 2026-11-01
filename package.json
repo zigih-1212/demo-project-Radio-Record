@@ -8,6 +8,8 @@
     "dev:worker": "tsx watch server.ts worker",
     "start": "tsx server.ts api",
     "start:worker": "tsx server.ts worker",
+    "start:all": "node scripts/start.mjs",
+    "demo": "node scripts/demo.mjs",
     "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck server.ts"
   },
   "engines": {
