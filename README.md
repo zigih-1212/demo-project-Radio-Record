@@ -224,18 +224,41 @@ All variables are validated with Zod at startup (defaults shown):
 
 ```
 pulseops-demo/
-├── server.ts            # API + worker + inline dashboard (single file, adapter-based)
-├── scripts/
-│   ├── start.mjs        # one-click launcher: Docker if available, else demo mode
-│   └── demo.mjs         # demo-mode launcher (DEMO_MODE=1)
-├── start.bat            # Windows double-click entry point
-├── start.sh             # macOS/Linux entry point
-├── docker-compose.yml   # postgres + redis + rabbitmq + api + worker
-├── Dockerfile
-├── .env.example
-├── package.json
+├── server.ts            # thin entry — bootstraps src/main.ts (keeps `tsx server.ts api|worker`)
+├── src/
+│   ├── config.ts        # Zod-validated env (JWT, lease, rate-limit settings)
+│   ├── logger.ts        # structured JSON logs
+│   ├── errors.ts        # AppError hierarchy + single error middleware input
+│   ├── types.ts         # domain types + IStore/ICache/IQueue interfaces
+│   ├── auth.ts          # scrypt hashing, HS256 JWT, refresh rotation + reuse detection, RBAC
+│   ├── app.ts           # express factory: CORS, headers, requestId, logging, rate limit
+│   ├── main.ts          # bootstrap (demo/docker), graceful shutdown with drain
+│   ├── ui.ts            # inline dashboard (login, stats, filters, drawer, toasts)
+│   ├── routes.ts        # auth + jobs + admin routes, real permission middleware
+│   ├── store/           # PostgresStore (leases, outbox, transactions) + MemoryStore
+│   ├── cache.ts         # RedisCache + MemoryCache
+│   ├── queue.ts         # RabbitQueue (reconnect, DLQ) + MemoryQueue
+│   └── services/        # outbox dispatcher, worker (leases/backoff/reaper), jobs service
+├── tests/               # 29 node:test cases — no new dependencies
+├── scripts/             # start.mjs (Docker if available, else demo), demo.mjs
+├── start.bat / start.sh # one-click launchers
+├── docker-compose.yml, Dockerfile, tsconfig.json, .env.example, package.json
 └── README.md
 ```
+
+### 🔒 Auth, RBAC and reliability (v2 hardening)
+
+- **Auth:** JWT access tokens (15 min) + rotating refresh tokens in HttpOnly `Secure` `SameSite=Lax` cookies (7 d); refresh reuse detection revokes the whole family; scrypt password hashing. Demo admin: `admin@demo.local` / `admin-demo-123` (override via `ADMIN_EMAIL` / `ADMIN_PASSWORD`).
+- **RBAC (real server-side checks):** public — `GET /api/health`, `GET /api/stats`, `POST /api/auth/*`; operator+ — jobs read/create/retry/cancel; admin only — `GET /api/metrics`, `POST /api/dlq/replay`.
+- **Worker:** lease-based claiming (`lease_expires_at`, `locked_by`) + reaper recovering stuck `processing` jobs after a crash; at-least-once with a side-effect-once guard; automatic retry with exponential backoff **+ jitter** to `max_attempts`, then DLQ; safe DLQ replay via admin endpoint (DB is the source of truth); outbox rows published/marked individually with per-row backoff.
+- **Tests:** `npm test` — 29 node:test cases: leases/reaper, crash recovery, redelivery idempotency, DLQ at max attempts, malformed→DLQ, store-down requeue (no loss), outbox backoff, retry/cancel guards, create idempotency, JWT roundtrip/expiry/tamper, refresh rotation + reuse detection, RBAC matrix.
+
+### 🔒 Авторизация, RBAC и надёжность (v2)
+
+- **Auth:** JWT access (15 мин) + ротируемые refresh в HttpOnly `Secure` `SameSite=Lax` куке (7 д); повторное использование refresh отзывает всю семью; пароли — scrypt. Демо-админ: `admin@demo.local` / `admin-demo-123`.
+- **RBAC (реальные серверные проверки):** публично — health/stats/auth; operator+ — чтение/создание/retry/cancel задач; admin — metrics и DLQ replay.
+- **Воркер:** лизы (`lease_expires_at`, `locked_by`) + reaper восстановления «зависших» задач; at-least-once с защитой от повторных побочных эффектов; retry с exponential backoff **+ jitter** до `max_attempts`, затем DLQ; безопасный replay из DLQ через admin-эндпоинт; outbox-публикация покомандная с backoff.
+- **Тесты:** `npm test` — 29 тестов node:test (без новых зависимостей).
 
 The adapters (`PostgresStore`/`MemoryStore`, `RedisCache`/`MemoryCache`,
 `RabbitQueue`/`MemoryQueue`) implement shared interfaces (`IStore`, `ICache`, `IQueue`),

@@ -29,16 +29,22 @@ services:
       REDIS_URL: redis://redis:6379
       AMQP_URL: amqp://pulseops:pulseops@rabbitmq:5672
       PORT: "3000"
+      JWT_SECRET: change-me-in-production-use-a-long-random-string!!
+      ADMIN_EMAIL: admin@pulseops.local
+      ADMIN_PASSWORD: change-me-admin-password
     ports: ["3000:3000"]
     depends_on: [postgres, redis, rabbitmq]
-    command: ["npm", "run", "start"]
+    command: ["npm", "start"]
   worker:
     build: .
     environment:
       DATABASE_URL: postgres://pulseops:pulseops@postgres:5432/pulseops
       REDIS_URL: redis://redis:6379
       AMQP_URL: amqp://pulseops:pulseops@rabbitmq:5672
+      JWT_SECRET: change-me-in-production-use-a-long-random-string!!
+      ADMIN_EMAIL: admin@pulseops.local
+      ADMIN_PASSWORD: change-me-admin-password
     depends_on: [postgres, redis, rabbitmq]
-    command: ["npm", "run", "start:worker"]
+    command: ["npm", "start:worker"]
 volumes:
   pgdata:

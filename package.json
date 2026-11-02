@@ -10,7 +10,8 @@
     "start:worker": "tsx server.ts worker",
     "start:all": "node scripts/start.mjs",
     "demo": "node scripts/demo.mjs",
-    "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --esModuleInterop --skipLibCheck server.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/store.test.ts tests/worker.test.ts tests/auth.test.ts tests/services.test.ts"
   },
   "engines": {
     "node": ">=20"
