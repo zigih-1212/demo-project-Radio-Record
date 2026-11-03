@@ -173,7 +173,7 @@ function renderTable() {
     html += '<tr data-id="' + j.id + '"><td><b>' + esc(j.title) + '</b><br/><span style="color:var(--muted);font-size:11px">' + esc(j.id.slice(0, 8)) + '</span></td>'
       + '<td>' + esc(j.job_type) + '</td><td>' + esc(j.priority) + '</td><td>' + pill(j.status) + '</td>'
       + '<td>' + j.attempts + '/' + j.max_attempts + '</td><td style="font-size:12px;color:var(--muted)">' + fmtTs(j.updated_at) + '</td>'
-      + '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="openDetail(\\'' + j.id + '\\')">Детали</button></td></tr>';
+      + '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="openDetail(\'' + j.id + '\')">Детали</button></td></tr>';
   });
   document.getElementById('rows').innerHTML = html || '<tr><td colspan="7" style="text-align:center;color:var(--muted)">Нет задач</td></tr>';
   var pages = Math.max(1, Math.ceil(state.total / state.limit));

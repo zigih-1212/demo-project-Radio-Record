@@ -147,3 +147,56 @@ test("worker: crash mid-job is recovered by the lease reaper", async () => {
   assert.equal(reloaded?.status, "succeeded");
   assert.equal(reloaded?.attempts, 2, "at-least-once: attempts incremented");
 });
+
+test("worker: failing job cycles through all attempts to failed + DLQ across multiple deliveries", async () => {
+  const store = makeStore();
+  await store.init();
+  const queue = new FakeQueue();
+  const worker = new WorkerService(store, queue, new MemoryCache());
+  const job = await store.createJob({ title: "poison cycle", type: "import_orders", priority: "normal", simulateFailure: true });
+  const mem = store as unknown as { jobs: Map<string, JobRow> };
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const row = mem.jobs.get(job.id);
+    assert.ok(row, `job row must exist before attempt ${attempt}`);
+    row.available_at = new Date(Date.now() - 1000).toISOString(); // dispatcher delivers due job
+    await worker.handleJobMessage(fakeMessage(job.id));
+    const reloaded = await store.getJob(job.id);
+    if (attempt < 5) {
+      assert.equal(reloaded?.status, "queued", `attempt ${attempt} must requeue with backoff`);
+      assert.ok(new Date(reloaded?.available_at ?? 0).getTime() > Date.now(), `attempt ${attempt} retry must be delayed`);
+      assert.equal(reloaded?.attempts, attempt, `attempt ${attempt} counter`);
+    } else {
+      assert.equal(reloaded?.status, "failed", "after max attempts job must be failed");
+      assert.equal(reloaded?.attempts, 5);
+      assert.equal(queue.dlq.length, 1, "exhausted job must be published to DLQ");
+      const dlqPayload = queue.dlq[0] as { jobId: string; reason: string };
+      assert.equal(dlqPayload.jobId, job.id);
+      assert.equal(dlqPayload.reason, "max_attempts");
+    }
+  }
+  const events = await store.getEvents(job.id);
+  assert.equal(events.filter((e) => e.event_type === "processing").length, 5, "each delivery must re-execute the job");
+  assert.equal(events.filter((e) => e.event_type === "retry_scheduled").length, 4, "four intermediate retries must be scheduled");
+  assert.ok(events.some((e) => e.event_type === "failed" && (e.message ?? "").includes("Превышено число попыток")), "final failure event must mention max attempts");
+});
+
+test("worker: job cancelled mid-flight is NOT resurrected when finish returns false", async () => {
+  class CancelDuringClaimStore extends MemoryStore {
+    override async claim(id: string, workerId: string, leaseTtlSeconds: number): Promise<JobRow | null> {
+      const row = await super.claim(id, workerId, leaseTtlSeconds);
+      if (row) await super.cancelJob(id); // user cancels while worker processes
+      return row;
+    }
+  }
+  const store = new CancelDuringClaimStore();
+  await store.init();
+  const queue = new FakeQueue();
+  const worker = new WorkerService(store, queue, new MemoryCache());
+  const job = await store.createJob({ title: "cancel race", type: "campaign_publish", priority: "high", simulateFailure: false });
+  await worker.handleJobMessage(fakeMessage(job.id));
+  const reloaded = await store.getJob(job.id);
+  assert.equal(reloaded?.status, "cancelled", "cancelled job must stay cancelled");
+  const pending = await store.outboxPending();
+  const queuedRows = pending.filter((o) => o.aggregate_id === job.id && o.event_type === "job.queued");
+  assert.equal(queuedRows.length, 1, "exactly one job.queued row (from creation); a cancelled job must not be republished");
+});

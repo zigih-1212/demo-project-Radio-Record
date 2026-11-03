@@ -95,15 +95,15 @@ export class WorkerService {
     try {
       await this.store.addEvent(jobId, "processing", `Подхвачено ${this.workerId}`);
 
-      // side-effect-once guard: never re-run a job that already reached a
-      // terminal state (protects against uncontrolled duplication)
-      const events = await this.store.getEvents(jobId);
-      const terminal = events.some((e) => e.event_type === "succeeded" || e.event_type === "failed");
-      if (terminal) {
-        logger.info("job already terminal — skipping duplicate side effect", { jobId });
-        msg.ack();
-        return;
-      }
+      // Side-effect-once is enforced by the store, not by scanning events:
+      // claim() atomically moves queued->processing under a lease
+      // (UPDATE ... WHERE status='queued' AND available_at<=NOW()), and
+      // finish() only succeeds for the lease holder (locked_by guard).
+      // A redelivered message for a processing or terminal job gets
+      // claim=null and is acked without side effects. The previous
+      // event-based guard broke the retry cycle: an intermediate retryable
+      // failure writes a 'failed' event, so attempt 2 was skipped without
+      // finishing and the job stranded as 'processing' forever.
 
       // ── simulated business work (replace with real side effect) ──
       await new Promise((resolve) => setTimeout(resolve, 850));
@@ -114,10 +114,19 @@ export class WorkerService {
 
       const finished = await this.store.finish(jobId, this.workerId, "succeeded", null);
       if (!finished) {
-        // lease was stolen by the reaper before finish — republish so the
-        // job is picked up again (idempotency guard still applies)
-        await this.store.insertOutbox(randomUUID(), jobId, "job.queued", { jobId });
-        logger.warn("lease lost before finish — job republished to outbox", { jobId });
+        // finish() returns false when the reaper stole the lease (job was
+        // requeued) OR when the job was cancelled/terminated mid-flight.
+        // Republish only in the requeued case — never resurrect a job that
+        // already reached a terminal state.
+        const current = await this.store.getJob(jobId);
+        if (current && current.status === "queued") {
+          await this.store.insertOutbox(randomUUID(), jobId, "job.queued", { jobId });
+          logger.warn("lease lost before finish — job republished to outbox", { jobId });
+        } else if (current) {
+          logger.warn("finish skipped: job left processing state before finish", { jobId, status: current.status });
+        } else {
+          logger.warn("finish skipped: job not found", { jobId });
+        }
       } else {
         await this.store.addEvent(jobId, "succeeded", "Успешно обработано");
       }
