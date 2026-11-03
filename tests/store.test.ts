@@ -133,3 +133,16 @@ test("createJob is atomic: job + outbox row + created event", async () => {
   assert.ok(events.some((e) => e.event_type === "created"));
   assert.ok((await store.outboxCount()) >= 1);
 });
+
+test("createUser is idempotent by email (cold-start seeding race)", async () => {
+  // Regression for H1: api and worker could seed the admin in parallel on an
+  // empty database; the loser used to crash with a unique violation.
+  const store = new MemoryStore();
+  await store.init();
+  const first = await store.createUser("race@demo.local", "hash-1", "admin");
+  const second = await store.createUser("race@demo.local", "hash-1", "admin");
+  assert.equal(second.id, first.id, "duplicate insert must return the existing user");
+  const looked = await store.findUserByEmail("race@demo.local");
+  assert.equal(looked?.id, first.id);
+  assert.equal(looked?.role, "admin");
+});

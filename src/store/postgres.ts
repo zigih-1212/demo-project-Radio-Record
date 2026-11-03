@@ -450,10 +450,16 @@ export class PostgresStore implements IStore {
   }
 
   async createUser(email: string, passwordHash: string, role: Role): Promise<UserRow> {
-    const result = await this.pool.query<Record<string, unknown>>(
-      "INSERT INTO app_users(id,email,password_hash,role) VALUES($1,$2,$3,$4) RETURNING *",
+    const inserted = await this.pool.query<Record<string, unknown>>(
+      `INSERT INTO app_users(id,email,password_hash,role) VALUES($1,$2,$3,$4)
+       ON CONFLICT (email) DO NOTHING RETURNING *`,
       [randomUUID(), email, passwordHash, role],
     );
-    return toUserRow(result.rows[0]);
+    if (inserted.rowCount) return toUserRow(inserted.rows[0]);
+    // Lost an insert race (api and worker seeding in parallel on a cold start).
+    // Return the winning row instead of throwing a unique violation.
+    const existing = await this.pool.query("SELECT * FROM app_users WHERE email=$1", [email]);
+    if (!existing.rowCount) throw new Error("Failed to create or read user");
+    return toUserRow(existing.rows[0] as Record<string, unknown>);
   }
 }

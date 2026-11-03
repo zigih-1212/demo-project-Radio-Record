@@ -174,7 +174,14 @@ export class WorkerService {
       this.processed++;
       msg.ack();
     } catch (err) {
-      await this.handleFailure(jobId, claimed.attempts, claimed.max_attempts, err);
+      // Failure handling must never prevent the ack: an unacked message leaks
+      // the MemoryQueue concurrency slot, and an unhandled rejection would
+      // crash the process on current Node versions.
+      try {
+        await this.handleFailure(jobId, claimed.attempts, claimed.max_attempts, err);
+      } catch (failureError) {
+        logger.error("failure handling crashed", { jobId, error: errorMessage(failureError) });
+      }
       msg.ack();
     } finally {
       await this.cache.del(STATS_CACHE_KEY).catch(() => undefined);
@@ -200,7 +207,13 @@ export class WorkerService {
       await this.store
         .addEvent(jobId, "failed", `Превышено число попыток (${maxAttempts}). ${detail}`)
         .catch(() => undefined);
-      this.queue.publishDLQ({ jobId, reason: "max_attempts", error: detail });
+      try {
+        this.queue.publishDLQ({ jobId, reason: "max_attempts", error: detail });
+      } catch (publishError) {
+        // The job is already terminal in the store; a broker outage here must
+        // not crash the worker (the record is still recoverable via replay).
+        logger.error("DLQ publish failed", { jobId, error: errorMessage(publishError) });
+      }
       logger.error("job failed permanently — published to DLQ", { jobId, attempts, error: detail });
     }
   }

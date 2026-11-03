@@ -15,10 +15,17 @@ import { createApp } from "./app.js";
 import type { ICache, IQueue, IStore } from "./types.js";
 
 async function seedAdmin(store: IStore): Promise<void> {
-  const existing = await store.findUserByEmail(env.ADMIN_EMAIL);
-  if (existing) return;
-  await store.createUser(env.ADMIN_EMAIL, hashPassword(env.ADMIN_PASSWORD), "admin");
-  logger.info("admin user seeded", { email: env.ADMIN_EMAIL });
+  try {
+    const existing = await store.findUserByEmail(env.ADMIN_EMAIL);
+    if (existing) return;
+    await store.createUser(env.ADMIN_EMAIL, hashPassword(env.ADMIN_PASSWORD), "admin");
+    logger.info("admin user seeded", { email: env.ADMIN_EMAIL });
+  } catch (error) {
+    // api and worker may start in parallel against an empty database; the
+    // loser of that race must not abort startup. createUser is idempotent
+    // (Postgres ON CONFLICT), so this is a safety net for any other error too.
+    logger.warn("admin seed skipped", { email: env.ADMIN_EMAIL, error: errorMessage(error) });
+  }
 }
 
 export async function bootstrap(): Promise<void> {

@@ -79,6 +79,18 @@ const errorMiddleware: ErrorRequestHandler = (err: unknown, req: Request, res: R
     });
     return;
   }
+  // body-parser errors carry a `type`; without this branch a client sending
+  // malformed JSON got a 500 "internal error", which is both wrong HTTP
+  // semantics and misleading in logs.
+  const bodyErrorType = typeof (err as { type?: unknown })?.type === "string" ? (err as { type: string }).type : "";
+  if (bodyErrorType === "entity.parse.failed") {
+    res.status(400).json({ error: "Некорректный JSON в теле запроса", code: "invalid_json", requestId });
+    return;
+  }
+  if (bodyErrorType === "entity.too.large") {
+    res.status(413).json({ error: "Тело запроса слишком большое", code: "payload_too_large", requestId });
+    return;
+  }
   logger.error("unhandled", { requestId, error: errorMessage(err) });
   if (res.headersSent) return;
   res.status(500).json({ error: "Внутренняя ошибка сервера", code: "internal", requestId });
@@ -95,9 +107,11 @@ export function createApp(deps: AppDeps): Express {
     next();
   });
   app.use(corsMiddleware());
-  app.use(express.json({ limit: "32kb" }));
+  // requestId and logging must run BEFORE the body parser: otherwise a body
+  // parse failure is reported with requestId "unknown" and never logged.
   app.use(requestIdMiddleware);
   app.use(loggingMiddleware);
+  app.use(express.json({ limit: "32kb" }));
   app.use(createRoutes({ store: deps.store, cache: deps.cache, queue: deps.queue, jobService: deps.jobService }));
   app.get("/", (_req: Request, res: Response) => {
     res.type("html").send(APP_HTML);

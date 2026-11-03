@@ -243,3 +243,31 @@ test("worker: stop() is idempotent and closes the queue", async () => {
   await worker.stop(100); // second call must not throw
 });
 
+test("worker: a broker failure while handling a failure still acks (no crash, no leak)", async () => {
+  // Regression for M3: handleFailure used to be unguarded, so a throwing store
+  // or queue during failure handling produced an unhandled rejection (process
+  // crash) and skipped the ack (MemoryQueue slot leak).
+  class ExplodingDLQQueue extends FakeQueue {
+    override publishDLQ(): void {
+      throw new Error("broker down");
+    }
+  }
+  const store = makeStore();
+  await store.init();
+  const queue = new ExplodingDLQQueue();
+  const worker = new WorkerService(store, queue, new MemoryCache());
+  const job = await store.createJob({ title: "explode", type: "import_orders", priority: "low", simulateFailure: true });
+
+  const mem = store as unknown as { jobs: Map<string, JobRow> };
+  const row = mem.jobs.get(job.id);
+  assert.ok(row);
+  row.attempts = row.max_attempts - 1;
+
+  const msg = fakeMessage(job.id);
+  await worker.handleJobMessage(msg); // must resolve, not reject
+
+  assert.ok(msg.calls.includes("ack"), "message must be acked even when DLQ publish fails");
+  const reloaded = await store.getJob(job.id);
+  assert.equal(reloaded?.status, "failed", "job is still terminal in the store");
+});
+

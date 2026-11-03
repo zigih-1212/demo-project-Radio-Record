@@ -301,6 +301,10 @@ export class MemoryStore implements IStore {
   }
 
   async createUser(email: string, passwordHash: string, role: Role): Promise<UserRow> {
+    const existing = await this.findUserByEmail(email);
+    // Parity with the Postgres ON CONFLICT variant: seeding the admin twice
+    // (api + worker in parallel) must not create a duplicate or throw.
+    if (existing) return existing;
     const user: UserRow = { id: randomUUID(), email, password_hash: passwordHash, role, created_at: nowIso() };
     this.users.set(user.id, user);
     return { ...user };
