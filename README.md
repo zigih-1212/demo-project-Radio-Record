@@ -266,8 +266,9 @@ pulseops-demo/
 │   ├── cache.ts         # RedisCache + MemoryCache
 │   ├── queue.ts         # RabbitQueue (reconnect, DLQ) + MemoryQueue
 │   └── services/        # outbox dispatcher, worker (leases/backoff/reaper), jobs service
-├── tests/               # 43 node:test cases (7 files) — no new dependencies
+├── tests/               # 49 node:test cases (8 files) — no new dependencies
 ├── scripts/             # start.mjs (Docker if available, else demo), demo.mjs
+├── migrations/          # versioned SQL (schema_migrations-tracked), auto-run at bootstrap
 ├── start.bat / start.sh # one-click launchers
 ├── docker-compose.yml, Dockerfile, tsconfig.json, .env.example, package.json
 └── README.md
@@ -278,14 +279,14 @@ pulseops-demo/
 - **Auth:** JWT access tokens (15 min) + rotating refresh tokens in HttpOnly `Secure` `SameSite=Lax` cookies (7 d); refresh reuse detection revokes the whole family; scrypt password hashing. Demo admin: `admin@demo.local` / `admin-demo-123` (override via `ADMIN_EMAIL` / `ADMIN_PASSWORD`).
 - **RBAC (real server-side checks):** public — `GET /api/health`, `GET /api/stats`, `POST /api/auth/*`; operator+ — jobs read/create/retry/cancel; admin only — `GET /api/metrics`, `POST /api/dlq/replay`.
 - **Worker:** lease-based claiming (`lease_expires_at`, `locked_by`) + reaper recovering stuck `processing` jobs after a crash; at-least-once with a side-effect-once guard; automatic retry with exponential backoff **+ jitter** to `max_attempts`, then DLQ; safe DLQ replay via admin endpoint (DB is the source of truth); outbox rows published/marked individually with per-row backoff.
-- **Tests:** `npm test` — 43 node:test cases (7 files) — no new dependencies: leases/reaper, crash recovery, redelivery idempotency, DLQ at max attempts, malformed→DLQ, store-down requeue (no loss), outbox backoff, retry/cancel guards, create idempotency, JWT roundtrip/expiry/tamper, refresh rotation + reuse detection, RBAC matrix, HTTP-level API contract (malformed/oversized JSON → 400/413), worker stop drain, Rabbit reconnect backoff.
+- **Tests:** `npm test` — 49 node:test cases (8 files) — no new dependencies: leases/reaper, crash recovery, redelivery idempotency, DLQ at max attempts, malformed→DLQ, store-down requeue (no loss), outbox backoff, retry/cancel guards, create idempotency, JWT roundtrip/expiry/tamper, refresh rotation + reuse detection, RBAC matrix, HTTP-level API contract (malformed/oversized JSON → 400/413), worker stop drain, Rabbit reconnect backoff, migration runner (ordering/skip/rollback).
 
 ### 🔒 Авторизация, RBAC и надёжность (v2)
 
 - **Auth:** JWT access (15 мин) + ротируемые refresh в HttpOnly `Secure` `SameSite=Lax` куке (7 д); повторное использование refresh отзывает всю семью; пароли — scrypt. Демо-админ: `admin@demo.local` / `admin-demo-123`.
 - **RBAC (реальные серверные проверки):** публично — health/stats/auth; operator+ — чтение/создание/retry/cancel задач; admin — metrics и DLQ replay.
 - **Воркер:** лизы (`lease_expires_at`, `locked_by`) + reaper восстановления «зависших» задач; at-least-once с защитой от повторных побочных эффектов; retry с exponential backoff **+ jitter** до `max_attempts`, затем DLQ; безопасный replay из DLQ через admin-эндпоинт; outbox-публикация покомандная с backoff.
-- **Тесты:** `npm test` — 43 теста node:test (7 файлов, без новых зависимостей): лизы/reaper, восстановление после падения, идемпотентность повторной доставки, DLQ при исчерпании попыток, malformed→DLQ, requeue при недоступном сторе, отложенная публикация с backoff, защита retry/cancel, идемпотентность создания, JWT (круг/expiry/tamper), ротация refresh + детект повторного использования, RBAC-матрица, HTTP-контракт API (JSON → 400/413), дренаж задач при остановке воркера, backoff переподключения Rabbit.
+- **Тесты:** `npm test` — 49 тестов node:test (8 файлов, без новых зависимостей): лизы/reaper, восстановление после падения, идемпотентность повторной доставки, DLQ при исчерпании попыток, malformed→DLQ, requeue при недоступном сторе, отложенная публикация с backoff, защита retry/cancel, идемпотентность создания, JWT (круг/expiry/tamper), ротация refresh + детект повторного использования, RBAC-матрица, HTTP-контракт API (JSON → 400/413), дренаж задач при остановке воркера, backoff переподключения Rabbit, миграционный раннер (порядок/пропуск/откат).
 
 The adapters (`PostgresStore`/`MemoryStore`, `RedisCache`/`MemoryCache`,
 `RabbitQueue`/`MemoryQueue`) implement shared interfaces (`IStore`, `ICache`, `IQueue`),
@@ -567,8 +568,9 @@ pulseops-demo/
 │   ├── cache.ts         # RedisCache + MemoryCache
 │   ├── queue.ts         # RabbitQueue (reconnect, DLQ) + MemoryQueue
 │   └── services/        # outbox-диспетчер, воркер (лизы/backoff/reaper), jobs-сервис
-├── tests/               # 43 теста node:test (7 файлов) — без новых зависимостей
+├── tests/               # 49 тестов node:test (8 файлов) — без новых зависимостей
 ├── scripts/             # start.mjs (Docker, если есть, иначе демо-режим), demo.mjs
+├── migrations/          # версионированный SQL (отслеживается schema_migrations), авто-запуск при старте
 ├── start.bat / start.sh # запуск в один клик
 ├── docker-compose.yml, Dockerfile, tsconfig.json, .env.example, package.json
 └── README.md
