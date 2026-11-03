@@ -132,6 +132,7 @@ Open **http://localhost:3000** — create a job, watch it become `processing` �
 ### Option C — Full stack in Docker
 
 ```bash
+cp .env.example .env   # secrets (JWT_SECRET, admin creds) come from local .env — see .env.example
 docker compose up --build
 ```
 
@@ -438,6 +439,7 @@ npm run demo
 ### Вариант C — Полный стек в Docker
 
 ```bash
+cp .env.example .env   # секреты (JWT_SECRET, данные админа) берутся из локального .env — см. .env.example
 docker compose up --build
 ```
 

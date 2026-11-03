@@ -1,4 +1,8 @@
-version: "3.9"
+# Infrastructure for the PulseOps demo.
+#
+# Secrets (JWT_SECRET, admin credentials) are deliberately NOT committed here:
+# they are read from the local .env file (values in .env.example are insecure
+# demo placeholders). Copy .env.example to .env and adjust before `docker compose up`.
 services:
   postgres:
     image: postgres:16-alpine
@@ -13,15 +17,29 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+    healthcheck:
+      # redis-cli ping returns 0 on "PONG", 1 on "LOADING"/unreachable.
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
   rabbitmq:
     image: rabbitmq:3-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: pulseops
       RABBITMQ_DEFAULT_PASS: pulseops
     ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
   api:
     build: .
     environment:
@@ -29,11 +47,18 @@ services:
       REDIS_URL: redis://redis:6379
       AMQP_URL: amqp://pulseops:pulseops@rabbitmq:5672
       PORT: "3000"
-      JWT_SECRET: change-me-in-production-use-a-long-random-string!!
-      ADMIN_EMAIL: admin@pulseops.local
-      ADMIN_PASSWORD: change-me-admin-password
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - copy .env.example to .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required - copy .env.example to .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required - copy .env.example to .env}
     ports: ["3000:3000"]
-    depends_on: [postgres, redis, rabbitmq]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
     command: ["npm", "start"]
   worker:
     build: .
@@ -41,10 +66,17 @@ services:
       DATABASE_URL: postgres://pulseops:pulseops@postgres:5432/pulseops
       REDIS_URL: redis://redis:6379
       AMQP_URL: amqp://pulseops:pulseops@rabbitmq:5672
-      JWT_SECRET: change-me-in-production-use-a-long-random-string!!
-      ADMIN_EMAIL: admin@pulseops.local
-      ADMIN_PASSWORD: change-me-admin-password
-    depends_on: [postgres, redis, rabbitmq]
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - copy .env.example to .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required - copy .env.example to .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required - copy .env.example to .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
     command: ["npm", "start:worker"]
 volumes:
   pgdata:
