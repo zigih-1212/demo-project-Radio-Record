@@ -2,7 +2,7 @@
   "name": "pulseops-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "Full-stack demo: React dashboard, TypeScript API, PostgreSQL, Redis and RabbitMQ outbox/worker pipeline",
+  "description": "Full-stack async job-processing demo: vanilla-inline dashboard, TypeScript API, PostgreSQL, Redis and RabbitMQ outbox/worker pipeline",
   "scripts": {
     "dev": "tsx watch server.ts api",
     "dev:worker": "tsx watch server.ts worker",

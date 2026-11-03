@@ -6,7 +6,7 @@
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Express](https://img.shields.io/badge/Express-4.x-888888?logo=express)](https://expressjs.com/)
+[![Express](https://img.shields.io/badge/Express-5.x-888888?logo=express)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169e1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7-dc382d?logo=redis&logoColor=white)](https://redis.io/)
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3-ff6600?logo=rabbitmq&logoColor=white)](https://www.rabbitmq.com/)
@@ -150,23 +150,39 @@ npm run dev:worker  # worker     -> second terminal
 
 ## 📡 API reference
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | Inline dashboard |
-| `GET` | `/api/health` | Health: DB, Redis, RabbitMQ, worker heartbeat, outbox pending |
-| `GET` | `/api/stats` | Aggregated counters by status (Redis-cached, 3 s TTL) |
-| `GET` | `/api/metrics` | Prometheus-style text metrics |
-| `GET` | `/api/jobs` | List: `status`, `type`, `priority`, `q`, `limit`, `offset` |
-| `GET` | `/api/jobs/:id` | Job detail + event timeline |
-| `POST` | `/api/jobs` | Create job (`Idempotency-Key` supported) |
-| `POST` | `/api/jobs/:id/retry` | Requeue a failed job (respects `max_attempts`) |
-| `POST` | `/api/jobs/:id/cancel` | Cancel a queued/processing job |
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| `GET` | `/` | Inline dashboard | public |
+| `GET` | `/api/health` | Health: DB, Redis, RabbitMQ, worker heartbeat, outbox pending | public |
+| `GET` | `/api/stats` | Aggregated counters by status (Redis-cached, 3 s TTL) | public |
+| `POST` | `/api/auth/login` | Exchange email/password for a Bearer access token + HttpOnly refresh cookie | public |
+| `POST` | `/api/auth/refresh` | Rotate the refresh cookie into a new token pair (reuse detection revokes the family) | cookie |
+| `POST` | `/api/auth/logout` | Revoke the active refresh token and clear cookies | cookie |
+| `GET` | `/api/auth/me` | Current user (email + role) from the access token | operator+ |
+| `GET` | `/api/metrics` | Prometheus-style text metrics | admin |
+| `GET` | `/api/jobs` | List: `status`, `type`, `priority`, `q`, `limit`, `offset` | operator+ |
+| `GET` | `/api/jobs/:id` | Job detail + event timeline | operator+ |
+| `POST` | `/api/jobs` | Create job (`Idempotency-Key` supported) | operator+ |
+| `POST` | `/api/jobs/:id/retry` | Requeue a failed job (respects `max_attempts`) | operator+ |
+| `POST` | `/api/jobs/:id/cancel` | Cancel a queued/processing job | operator+ |
+| `POST` | `/api/dlq/replay` | Replay the whole DLQ back to the main queue (DB is the source of truth) | admin |
 
 ### Create a job
 
+Every protected endpoint requires a Bearer access token. Get one via `POST /api/auth/login`
+(demo admin: `admin@demo.local` / `admin-demo-123`):
+
 ```bash
+# 1. Login → extract the access token
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@demo.local","password":"admin-demo-123"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['accessToken'])")
+
+# 2. Create a job using the token
 curl -X POST http://localhost:3000/api/jobs \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: campaign-2026-11-01" \
   -d '{
     "title": "Публикация подборки выходного дня",
@@ -195,9 +211,9 @@ curl -X POST http://localhost:3000/api/jobs \
 ```
 queued ──▶ processing ──▶ succeeded
    │           │
-   │           └──▶ failed ──(retry)──▶ queued
+   │           └──▶ failed ──(retry w/ exponential backoff + jitter, attempts < max)──▶ queued
    │                     │
-   │                     └──(attempts ≥ max)──▶ DLQ (dead_letter event)
+   │                     └──(attempts ≥ max)──▶ failed (terminal) + published to DLQ
    └──(cancel)──▶ cancelled
 ```
 
@@ -213,10 +229,20 @@ All variables are validated with Zod at startup (defaults shown):
 | `DATABASE_URL` | `postgres://pulseops:pulseops@localhost:5432/pulseops` | PostgreSQL DSN |
 | `REDIS_URL` | `redis://localhost:6379` | Redis DSN |
 | `AMQP_URL` | `amqp://pulseops:pulseops@localhost:5672` | RabbitMQ DSN |
-| `DEMO_MODE` | `0` | `1` = in-memory single-process demo |
-| `WORKER_CONCURRENCY` | `5` | Worker prefetch / parallel jobs |
-| `CORS_ORIGIN` | `*` | Allowed origin |
 | `NODE_ENV` | `development` | Environment |
+| `CORS_ORIGIN` | `*` | Allowed origin |
+| `WORKER_CONCURRENCY` | `5` | Worker prefetch / parallel jobs |
+| `DEMO_MODE` | `0` | `1` = in-memory single-process demo |
+| `JWT_SECRET` | `demo-secret-change-me-in-production!!` | HS256 signing secret (**set your own in production**) |
+| `ACCESS_TOKEN_TTL_S` | `900` | Access token TTL, seconds (15 min) |
+| `REFRESH_TOKEN_TTL_S` | `604800` | Refresh token / cookie TTL, seconds (7 d) |
+| `JOB_LEASE_TTL_S` | `120` | Lease length, seconds before the reaper may claim a `processing` job |
+| `REAPER_INTERVAL_S` | `15` | How often the worker scans for expired leases |
+| `OUTBOX_BATCH` | `25` | Outbox rows dispatched per batch |
+| `RATE_LIMIT_GLOBAL` | `120` | Global requests per minute per IP |
+| `RATE_LIMIT_LOGIN` | `5` | Login attempts per minute per IP |
+| `ADMIN_EMAIL` | `admin@demo.local` | Seeded admin email |
+| `ADMIN_PASSWORD` | `admin-demo-123` | Seeded admin password |
 
 ---
 
@@ -239,7 +265,7 @@ pulseops-demo/
 │   ├── cache.ts         # RedisCache + MemoryCache
 │   ├── queue.ts         # RabbitQueue (reconnect, DLQ) + MemoryQueue
 │   └── services/        # outbox dispatcher, worker (leases/backoff/reaper), jobs service
-├── tests/               # 29 node:test cases — no new dependencies
+├── tests/               # 43 node:test cases (7 files) — no new dependencies
 ├── scripts/             # start.mjs (Docker if available, else demo), demo.mjs
 ├── start.bat / start.sh # one-click launchers
 ├── docker-compose.yml, Dockerfile, tsconfig.json, .env.example, package.json
@@ -251,14 +277,14 @@ pulseops-demo/
 - **Auth:** JWT access tokens (15 min) + rotating refresh tokens in HttpOnly `Secure` `SameSite=Lax` cookies (7 d); refresh reuse detection revokes the whole family; scrypt password hashing. Demo admin: `admin@demo.local` / `admin-demo-123` (override via `ADMIN_EMAIL` / `ADMIN_PASSWORD`).
 - **RBAC (real server-side checks):** public — `GET /api/health`, `GET /api/stats`, `POST /api/auth/*`; operator+ — jobs read/create/retry/cancel; admin only — `GET /api/metrics`, `POST /api/dlq/replay`.
 - **Worker:** lease-based claiming (`lease_expires_at`, `locked_by`) + reaper recovering stuck `processing` jobs after a crash; at-least-once with a side-effect-once guard; automatic retry with exponential backoff **+ jitter** to `max_attempts`, then DLQ; safe DLQ replay via admin endpoint (DB is the source of truth); outbox rows published/marked individually with per-row backoff.
-- **Tests:** `npm test` — 29 node:test cases: leases/reaper, crash recovery, redelivery idempotency, DLQ at max attempts, malformed→DLQ, store-down requeue (no loss), outbox backoff, retry/cancel guards, create idempotency, JWT roundtrip/expiry/tamper, refresh rotation + reuse detection, RBAC matrix.
+- **Tests:** `npm test` — 43 node:test cases (7 files) — no new dependencies: leases/reaper, crash recovery, redelivery idempotency, DLQ at max attempts, malformed→DLQ, store-down requeue (no loss), outbox backoff, retry/cancel guards, create idempotency, JWT roundtrip/expiry/tamper, refresh rotation + reuse detection, RBAC matrix, HTTP-level API contract (malformed/oversized JSON → 400/413), worker stop drain, Rabbit reconnect backoff.
 
 ### 🔒 Авторизация, RBAC и надёжность (v2)
 
 - **Auth:** JWT access (15 мин) + ротируемые refresh в HttpOnly `Secure` `SameSite=Lax` куке (7 д); повторное использование refresh отзывает всю семью; пароли — scrypt. Демо-админ: `admin@demo.local` / `admin-demo-123`.
 - **RBAC (реальные серверные проверки):** публично — health/stats/auth; operator+ — чтение/создание/retry/cancel задач; admin — metrics и DLQ replay.
 - **Воркер:** лизы (`lease_expires_at`, `locked_by`) + reaper восстановления «зависших» задач; at-least-once с защитой от повторных побочных эффектов; retry с exponential backoff **+ jitter** до `max_attempts`, затем DLQ; безопасный replay из DLQ через admin-эндпоинт; outbox-публикация покомандная с backoff.
-- **Тесты:** `npm test` — 29 тестов node:test (без новых зависимостей).
+- **Тесты:** `npm test` — 43 теста node:test (7 файлов, без новых зависимостей): лизы/reaper, восстановление после падения, идемпотентность повторной доставки, DLQ при исчерпании попыток, malformed→DLQ, requeue при недоступном сторе, отложенная публикация с backoff, защита retry/cancel, идемпотентность создания, JWT (круг/expiry/tamper), ротация refresh + детект повторного использования, RBAC-матрица, HTTP-контракт API (JSON → 400/413), дренаж задач при остановке воркера, backoff переподключения Rabbit.
 
 The adapters (`PostgresStore`/`MemoryStore`, `RedisCache`/`MemoryCache`,
 `RabbitQueue`/`MemoryQueue`) implement shared interfaces (`IStore`, `ICache`, `IQueue`),
@@ -270,7 +296,7 @@ so the business logic is completely infrastructure-agnostic.
 
 | Vacancy requirement | Where to see it |
 |---|---|
-| React.js | Inline dashboard: list, filters, search, create/retry/cancel, live polling |
+| React.js | *Honest note:* the dashboard is **inline vanilla TypeScript** (`src/ui.ts`), not React — no build step, served by the API itself. The layered routes → services → adapters design maps directly onto React/Angular feature modules. |
 | Node.js + TypeScript | Strict TS, typed interfaces, Zod validation |
 | NestJS-style architecture | Layered design: routes → services → store adapters, DI-friendly structure |
 | PostgreSQL | Schema, transactions, indexes, `FOR UPDATE SKIP LOCKED`, event log |
@@ -300,11 +326,11 @@ module by module.
 
 ## 🗺 Roadmap (what I would add next)
 
-- [ ] JWT auth + role-based access to the API
+- [x] JWT auth + role-based access to the API *(implemented — see Auth/RBAC section)*
 - [ ] Scheduled jobs (cron-like) with pg_cron / bull-board
-- [ ] Retries with exponential backoff per job type
+- [x] Retries with exponential backoff + jitter per job type *(implemented)*
 - [ ] Docker Swarm / Compose deploy profiles for staging & prod
-- [ ] Unit tests (Vitest) + API integration tests (supertest)
+- [x] Unit tests (node:test) + HTTP-level API integration tests *(implemented — `npm test`)*
 - [ ] Grafana dashboard for the Prometheus metrics
 
 ---
@@ -428,23 +454,39 @@ npm run dev:worker  # воркер     -> второй терминал
 
 ## 📡 API
 
-| Метод | Путь | Описание |
-|---|---|---|
-| `GET` | `/` | Встроенная панель |
-| `GET` | `/api/health` | Здоровье: БД, Redis, RabbitMQ, heartbeat воркера, отложенные события |
-| `GET` | `/api/stats` | Счётчики по статусам (кэш в Redis, TTL 3 с) |
-| `GET` | `/api/metrics` | Метрики в формате Prometheus |
-| `GET` | `/api/jobs` | Список: `status`, `type`, `priority`, `q`, `limit`, `offset` |
-| `GET` | `/api/jobs/:id` | Детали задачи + таймлайн событий |
-| `POST` | `/api/jobs` | Создать задачу (поддерживается `Idempotency-Key`) |
-| `POST` | `/api/jobs/:id/retry` | Вернуть failing-задачу в очередь (с учётом `max_attempts`) |
-| `POST` | `/api/jobs/:id/cancel` | Отменить queued/processing задачу |
+| Метод | Путь | Описание | Доступ |
+|---|---|---|---|
+| `GET` | `/` | Встроенная панель | public |
+| `GET` | `/api/health` | Здоровье: БД, Redis, RabbitMQ, heartbeat воркера, отложенные события | public |
+| `GET` | `/api/stats` | Счётчики по статусам (кэш в Redis, TTL 3 с) | public |
+| `POST` | `/api/auth/login` | Вход: Bearer access token + HttpOnly refresh cookie | public |
+| `POST` | `/api/auth/refresh` | Ротация refresh-куки (детект повторного использования отзывает семью) | cookie |
+| `POST` | `/api/auth/logout` | Отзыв refresh-токена и очистка кук | cookie |
+| `GET` | `/api/auth/me` | Текущий пользователь (email + роль) из access-токена | operator+ |
+| `GET` | `/api/metrics` | Метрики в формате Prometheus | admin |
+| `GET` | `/api/jobs` | Список: `status`, `type`, `priority`, `q`, `limit`, `offset` | operator+ |
+| `GET` | `/api/jobs/:id` | Детали задачи + таймлайн событий | operator+ |
+| `POST` | `/api/jobs` | Создать задачу (поддерживается `Idempotency-Key`) | operator+ |
+| `POST` | `/api/jobs/:id/retry` | Вернуть failing-задачу в очередь (с учётом `max_attempts`) | operator+ |
+| `POST` | `/api/jobs/:id/cancel` | Отменить queued/processing задачу | operator+ |
+| `POST` | `/api/dlq/replay` | Replay всей DLQ в основную очередь (источник истины — БД) | admin |
 
 ### Создание задачи
 
+Защищённые эндпоинты требуют Bearer access token. Получите его через `POST /api/auth/login`
+(демо-админ: `admin@demo.local` / `admin-demo-123`):
+
 ```bash
+# 1. Вход → извлекаем access token
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@demo.local","password":"admin-demo-123"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['accessToken'])")
+
+# 2. Создаём задачу с токеном
 curl -X POST http://localhost:3000/api/jobs \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: campaign-2026-11-01" \
   -d '{
     "title": "Публикация подборки выходного дня",
@@ -473,9 +515,9 @@ curl -X POST http://localhost:3000/api/jobs \
 ```
 queued ──▶ processing ──▶ succeeded
    │           │
-   │           └──▶ failed ──(retry)──▶ queued
+   │           └──▶ failed ──(retry c exponential backoff + jitter, attempts < max)──▶ queued
    │                     │
-   │                     └──(attempts ≥ max)──▶ DLQ (событие dead_letter)
+   │                     └──(attempts ≥ max)──▶ failed (терминально) + публикация в DLQ
    └──(cancel)──▶ cancelled
 ```
 
@@ -489,25 +531,44 @@ queued ──▶ processing ──▶ succeeded
 | `DATABASE_URL` | `postgres://pulseops:pulseops@localhost:5432/pulseops` | DSN PostgreSQL |
 | `REDIS_URL` | `redis://localhost:6379` | DSN Redis |
 | `AMQP_URL` | `amqp://pulseops:pulseops@localhost:5672` | DSN RabbitMQ |
-| `DEMO_MODE` | `0` | `1` = демо в памяти в одном процессе |
-| `WORKER_CONCURRENCY` | `5` | Prefetch воркера / параллельные задачи |
-| `CORS_ORIGIN` | `*` | Разрешённый origin |
 | `NODE_ENV` | `development` | Окружение |
+| `CORS_ORIGIN` | `*` | Разрешённый origin |
+| `WORKER_CONCURRENCY` | `5` | Prefetch воркера / параллельные задачи |
+| `DEMO_MODE` | `0` | `1` = демо в памяти в одном процессе |
+| `JWT_SECRET` | `demo-secret-change-me-in-production!!` | Секрет подписи HS256 (**установите свой в проде**) |
+| `ACCESS_TOKEN_TTL_S` | `900` | TTL access-токена, секунды (15 мин) |
+| `REFRESH_TOKEN_TTL_S` | `604800` | TTL refresh-токена / куки, секунды (7 д) |
+| `JOB_LEASE_TTL_S` | `120` | Длина лиза, секунды, до захвата reaper'ом «зависшей» задачи |
+| `REAPER_INTERVAL_S` | `15` | Как часто воркер сканирует истёкшие лизы |
+| `OUTBOX_BATCH` | `25` | Отложенных событий на батч |
+| `RATE_LIMIT_GLOBAL` | `120` | Запросов в минуту на IP |
+| `RATE_LIMIT_LOGIN` | `5` | Попыток входа в минуту на IP |
+| `ADMIN_EMAIL` | `admin@demo.local` | Email сидируемого админа |
+| `ADMIN_PASSWORD` | `admin-demo-123` | Пароль сидируемого админа |
 
 ## 📂 Структура проекта
 
 ```
 pulseops-demo/
-├── server.ts            # API + воркер + встроенная панель (один файл, на адаптерах)
-├── scripts/
-│   ├── start.mjs        # запуск в один клик: Docker, если есть, иначе демо-режим
-│   └── demo.mjs         # запуск демо-режима (DEMO_MODE=1)
-├── start.bat            # точка входа в Windows (двойной клик)
-├── start.sh             # точка входа в macOS/Linux
-├── docker-compose.yml   # postgres + redis + rabbitmq + api + worker
-├── Dockerfile
-├── .env.example
-├── package.json
+├── server.ts            # тонкая точка входа — бутстрапит src/main.ts (сохраняет `tsx server.ts api|worker`)
+├── src/
+│   ├── config.ts        # env-валидация через Zod (JWT, lease, rate-limit)
+│   ├── logger.ts        # структурированные JSON-логи
+│   ├── errors.ts        # иерархия AppError + единый middleware ошибок
+│   ├── types.ts         # доменные типы + интерфейсы IStore/ICache/IQueue
+│   ├── auth.ts          # scrypt-хеши, HS256 JWT, ротация refresh + детект повторов, RBAC
+│   ├── app.ts           # express-фабрика: CORS, заголовки, requestId, логирование, rate limit
+│   ├── main.ts          # bootstrap (demo/docker), graceful shutdown с дренажем
+│   ├── ui.ts            # встроенная панель (логин, статистика, фильтры, drawer, toasts)
+│   ├── routes.ts        # auth + jobs + admin роуты, реальные permission-мидлвары
+│   ├── store/           # PostgresStore (лизы, outbox, транзакции) + MemoryStore
+│   ├── cache.ts         # RedisCache + MemoryCache
+│   ├── queue.ts         # RabbitQueue (reconnect, DLQ) + MemoryQueue
+│   └── services/        # outbox-диспетчер, воркер (лизы/backoff/reaper), jobs-сервис
+├── tests/               # 43 теста node:test (7 файлов) — без новых зависимостей
+├── scripts/             # start.mjs (Docker, если есть, иначе демо-режим), demo.mjs
+├── start.bat / start.sh # запуск в один клик
+├── docker-compose.yml, Dockerfile, tsconfig.json, .env.example, package.json
 └── README.md
 ```
 
@@ -519,7 +580,7 @@ pulseops-demo/
 
 | Требование вакансии | Где посмотреть |
 |---|---|
-| React.js | Встроенная панель: список, фильтры, поиск, создание/повтор/отмена, живое обновление |
+| React.js | *Честно:* панель — **inline-ваниль на TypeScript** (`src/ui.ts`), не React — без шага сборки, отдаётся самим API. Слоистая структура routes → services → adapters напрямую переносится на фичи в React/Angular. |
 | Node.js + TypeScript | Строгий TS, типизированные интерфейсы, валидация Zod |
 | Архитектура в стиле NestJS | Слоистость: routes → services → store-адаптеры, структура, готовая к DI |
 | PostgreSQL | Схема, транзакции, индексы, `FOR UPDATE SKIP LOCKED`, лог событий |
@@ -550,5 +611,5 @@ MIT
 
 <p align="center">
   <b>Сделано для отклика на вакансию Radio Record (fullstack web-разработчик).</b><br/>
-  Stack: React · Node.js · TypeScript · NestJS-style · PostgreSQL · Redis · RabbitMQ · Docker · микросервисы
+  Stack: Node.js · TypeScript · NestJS-style · PostgreSQL · Redis · RabbitMQ · Docker · микросервисы · ванильная inline-панель (без React-сборки)
 </p>
