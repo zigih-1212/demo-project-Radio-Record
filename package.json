@@ -11,7 +11,7 @@
     "start:all": "node scripts/start.mjs",
     "demo": "node scripts/demo.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test tests/store.test.ts tests/worker.test.ts tests/auth.test.ts tests/services.test.ts tests/ui.test.ts"
+    "test": "node --import tsx --test tests/store.test.ts tests/worker.test.ts tests/auth.test.ts tests/services.test.ts tests/ui.test.ts tests/queue.test.ts"
   },
   "engines": {
     "node": ">=20"

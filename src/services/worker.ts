@@ -14,15 +14,19 @@ const HEARTBEAT_KEY = "pulseops:worker:heartbeat";
  *   terminal state or a scheduled retry);
  * - lease-based claiming: a claim sets lease_expires_at/locked_by, so a
  *   crashed worker's jobs are recovered by the reaper;
- * - side-effect-once: a terminal job event short-circuits reprocessing;
+ * - side-effect-once: enforced by the store (atomic claim + locked_by finish
+ *   guard), not by scanning events — see handleJobMessage;
  * - exponential backoff WITH jitter on business failures, up to max_attempts;
- * - messages that exhaust attempts are published to the DLQ.
+ * - messages that exhaust attempts are published to the DLQ;
+ * - graceful stop: in-flight jobs are drained before the consumer closes.
  */
 export class WorkerService {
   readonly workerId = `worker-${randomUUID().slice(0, 8)}`;
   private processed = 0;
   private reaperTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private readonly inFlight = new Set<Promise<void>>();
+  private stopping = false;
 
   constructor(
     private readonly store: IStore,
@@ -32,7 +36,19 @@ export class WorkerService {
 
   start(): void {
     void this.queue.consume((msg) => {
-      void this.handleJobMessage(msg);
+      if (this.stopping) {
+        // Shutting down: hand the message back instead of starting new work.
+        msg.nack(true);
+        return;
+      }
+      const task = this.handleJobMessage(msg)
+        .catch((err: unknown) => {
+          logger.error("job handler crashed", { jobId: msg.jobId, error: errorMessage(err) });
+        })
+        .finally(() => {
+          this.inFlight.delete(task);
+        });
+      this.inFlight.add(task);
     });
     this.reaperTimer = setInterval(() => void this.reap(), env.REAPER_INTERVAL_S * 1000);
     this.reaperTimer.unref?.();
@@ -42,11 +58,36 @@ export class WorkerService {
     logger.info("worker started", { workerId: this.workerId, concurrency: env.WORKER_CONCURRENCY });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Graceful shutdown: stop timers, let in-flight jobs finish (bounded by
+   * drainTimeoutMs), then close the consumer. Jobs still running after the
+   * timeout are left to the lease reaper of another worker / the next start.
+   */
+  async stop(drainTimeoutMs = 30_000): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
     if (this.reaperTimer) clearInterval(this.reaperTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.reaperTimer = null;
     this.heartbeatTimer = null;
+
+    const pending = [...this.inFlight];
+    if (pending.length > 0) {
+      logger.info("draining in-flight jobs", { count: pending.length, timeoutMs: drainTimeoutMs });
+      let timer: NodeJS.Timeout | null = null;
+      const timedOut = await Promise.race<boolean>([
+        Promise.allSettled(pending).then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), drainTimeoutMs);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        logger.warn("drain timeout — unfinished jobs will be recovered by the lease reaper", {
+          count: pending.length,
+        });
+      }
+    }
     await this.queue.close().catch(() => undefined);
   }
 

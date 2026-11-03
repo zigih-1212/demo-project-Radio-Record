@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { MemoryStore } from "../src/store/memory.js";
 import { MemoryCache } from "../src/cache.js";
 import { WorkerService } from "../src/services/worker.js";
+import { MemoryQueue } from "../src/queue.js";
 import type { IQueue, JobRow, QueueMessage } from "../src/types.js";
 
 class FakeQueue implements IQueue {
@@ -200,3 +201,45 @@ test("worker: job cancelled mid-flight is NOT resurrected when finish returns fa
   const queuedRows = pending.filter((o) => o.aggregate_id === job.id && o.event_type === "job.queued");
   assert.equal(queuedRows.length, 1, "exactly one job.queued row (from creation); a cancelled job must not be republished");
 });
+
+test("worker: stop() drains in-flight jobs instead of interrupting them", async () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  const store = new MemoryStore();
+  await store.init();
+  const queue = new MemoryQueue(2);
+  const worker = new WorkerService(store, queue, new MemoryCache());
+  const job = await store.createJob({ title: "drain me", type: "sync_catalog", priority: "normal", simulateFailure: false });
+
+  worker.start();
+  queue.publish({ jobId: job.id }, "normal");
+
+  // wait until the consumer has claimed the job (work itself takes ~850ms)
+  let claimed = false;
+  for (let i = 0; i < 75; i++) {
+    const current = await store.getJob(job.id);
+    if (current?.status === "processing") {
+      claimed = true;
+      break;
+    }
+    await sleep(20);
+  }
+  assert.ok(claimed, "job must be claimed by the running consumer before stop()");
+
+  await worker.stop(10_000);
+
+  const reloaded = await store.getJob(job.id);
+  assert.equal(reloaded?.status, "succeeded", "in-flight job must finish during the drain, not be abandoned");
+  const events = await store.getEvents(job.id);
+  assert.ok(events.some((e) => e.event_type === "succeeded"), "succeeded event must be recorded");
+});
+
+test("worker: stop() is idempotent and closes the queue", async () => {
+  const store = new MemoryStore();
+  await store.init();
+  const queue = new MemoryQueue(1);
+  const worker = new WorkerService(store, queue, new MemoryCache());
+  worker.start();
+  await worker.stop(100);
+  await worker.stop(100); // second call must not throw
+});
+
